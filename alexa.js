@@ -10,9 +10,11 @@ require('dotenv').config();
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-const ADMIN_USER_IDS = process.env.ADMIN_USER_IDS 
-  ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()) 
+const ADMIN_USER_IDS = process.env.ADMIN_USER_IDS
+  ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim())
   : [];
+
+const OWNER_CONTACT = process.env.OWNER_CONTACT || '';
 
 const DEFAULT_USER_EMAIL = process.env.DEFAULT_USER_EMAIL || 'blackbarsee@gmail.com';
 
@@ -137,6 +139,7 @@ console.log(`🌐 Allowed email domains: ${ALLOWED_EMAIL_DOMAINS.join(', ') || '
 console.log(`🔑 App Passwords: ${gmailAccounts.length}`);
 console.log(`📨 Netflix Senders: ${NETFLIX_SENDER_ADDRESSES.join(', ')}`);
 console.log(`👤 Admin IDs: ${ADMIN_USER_IDS.length > 0 ? ADMIN_USER_IDS.join(', ') : 'Not set'}`);
+console.log(`🛡️ Owner: ${OWNER_CONTACT || 'Not set'}`);
 console.log(`🗑️ Data Retention: ${DATA_RETENTION_DAYS} days`);
 console.log(`📅 ${new Date().toISOString().replace('T', ' ').split('.')[0]} UTC`);
 console.log('═'.repeat(60) + '\n');
@@ -1134,7 +1137,7 @@ function getAdminKeyboard() {
 // ════════════════════════════════════════════════════════════
 
 function setupHandlers() {
-  
+
   bot.onText(/\/start/, async (msg) => {
     const userId = msg.from.id.toString();
     const username = msg.from.username;
@@ -1208,9 +1211,31 @@ function setupHandlers() {
     });
   });
 
+  bot.onText(/\/request/, async (msg) => {
+    const userId = msg.from.id.toString();
+    const chatId = msg.chat.id;
+    const username = msg.from.username;
+    const firstName = msg.from.first_name;
+    const lastName = msg.from.last_name;
+    const fullName = `${firstName || ''} ${lastName || ''}`.trim();
+
+    if (isAuthorized(userId)) {
+      return bot.sendMessage(chatId, '✅ You already have access. Use /start to begin.');
+    }
+
+    await notifyAdminsOfAccessRequest(userId, fullName, username);
+
+    return bot.sendMessage(chatId,
+      `⏳ *ACCESS REQUEST SENT*\n\n` +
+      `Admins will review your request.\n` +
+      `Share your ID if asked: \`${escapeMarkdown(userId)}\``,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
   bot.onText(/\/add (.+)/, async (msg, match) => {
     const adminId = msg.from.id.toString();
-    
+
     if (!isAdmin(adminId)) {
       return bot.sendMessage(msg.chat.id, '🔒 Admin only!');
     }
@@ -1232,9 +1257,17 @@ function setupHandlers() {
     );
   });
 
+  bot.onText(/\/owner/, async (msg) => {
+    const contactText = OWNER_CONTACT
+      ? `👑 *ADMIN / OWNER*\n\n${escapeMarkdown(OWNER_CONTACT)}`
+      : '👑 Owner contact is not set. Configure OWNER_CONTACT in the environment.';
+
+    await bot.sendMessage(msg.chat.id, contactText, { parse_mode: 'Markdown' });
+  });
+
   bot.onText(/\/remove (.+)/, async (msg, match) => {
     const adminId = msg.from.id.toString();
-    
+
     if (!isAdmin(adminId)) {
       return bot.sendMessage(msg.chat.id, '🔒 Admin only!');
     }
@@ -1889,26 +1922,53 @@ function setupHandlers() {
       
       const hasEmail = !!user.email;
       
-      const helpText = hasEmail ?
-        `❓ *HOW TO USE*\n\n` +
-        `*Quick:*\n` +
-        `1️⃣ Request from Netflix\n` +
-        `2️⃣ Click button:\n` +
-        `   📱 Sign-in code\n` +
-        `   🏠 Household link\n` +
-        (isAdminUser ? `   🔑 Password reset\n` : '') +
-        `3️⃣ Get it instantly!\n\n` +
-        `📧 \`${escapeMarkdown(user.email)}\`\n` +
-        `⏱️ Last 30 minutes\n` +
-        `⚡ ${MAX_REQUESTS_PER_HOUR} req/hour`
-        :
-        `❓ *HOW TO USE*\n\n` +
-        `*Setup:*\n` +
-        `1️⃣ "Setup Email"\n` +
-        `2️⃣ Enter email\n` +
-        `3️⃣ Request from Netflix\n` +
-        `4️⃣ Click button\n` +
-        `5️⃣ Get code!`;
+      let helpText;
+
+      if (isAdminUser) {
+        const ownerLine = OWNER_CONTACT
+          ? `\n👑 Admin/Owner: ${escapeMarkdown(OWNER_CONTACT)}`
+          : '';
+
+        helpText =
+          `🛡️ *ADMIN GUIDE*\n\n` +
+          `*Core:*\n` +
+          `• /start - Start the bot\n` +
+          `• /request - Ask for access (for testers)\n` +
+          `• /help - Show this guide\n\n` +
+          `*User approvals:*\n` +
+          `• Inline "✅ Approve" buttons on access alerts\n` +
+          `• /add <id> - Manually allow a user\n` +
+          `• /remove <id> - Revoke a user\n\n` +
+          `*Maintenance:*\n` +
+          `• /cleanup - Prune old data\n` +
+          `• /storage - File size overview\n` +
+          `• /clearall - Reset logs and stats\n\n` +
+          `*Usage:*\n` +
+          `• Buttons fetch Household, Reset, and Sign-in codes\n` +
+          `• /owner - Show owner contact${ownerLine}`;
+      } else if (hasEmail) {
+        helpText =
+          `❓ *HOW TO USE*\n\n` +
+          `*Quick:*\n` +
+          `1️⃣ Request from Netflix\n` +
+          `2️⃣ Click button:\n` +
+          `   📱 Sign-in code\n` +
+          `   🏠 Household link\n` +
+          `   🔑 Password reset (admins only)\n` +
+          `3️⃣ Get it instantly!\n\n` +
+          `📧 \`${escapeMarkdown(user.email)}\`\n` +
+          `⏱️ Last 30 minutes\n` +
+          `⚡ ${MAX_REQUESTS_PER_HOUR} req/hour`;
+      } else {
+        helpText =
+          `❓ *HOW TO USE*\n\n` +
+          `*Setup:*\n` +
+          `1️⃣ "Setup Email"\n` +
+          `2️⃣ Enter email\n` +
+          `3️⃣ Request from Netflix\n` +
+          `4️⃣ Click button\n` +
+          `5️⃣ Get code!`;
+      }
       
       const helpMsg = await bot.sendMessage(chatId, helpText, {
         parse_mode: 'Markdown',
