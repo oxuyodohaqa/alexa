@@ -125,6 +125,18 @@ console.log('═'.repeat(60) + '\n');
 const userRequestQueue = {};
 const userRateLimits = {};
 
+function escapeMarkdown(text = '') {
+  return text.toString().replace(/([_*\[\]()`])/g, '\\$1');
+}
+
+function sanitizeUserForMarkdown(user = {}) {
+  return {
+    fullName: escapeMarkdown(user.fullName || 'Unknown User'),
+    username: escapeMarkdown(user.username || 'none'),
+    email: escapeMarkdown(user.email || 'No email')
+  };
+}
+
 function isUserBusy(userId) {
   return userRequestQueue[userId] === true;
 }
@@ -526,49 +538,58 @@ async function logActivity(userId, action, details = {}) {
   if (ADMIN_USER_IDS.length > 0 && !ADMIN_USER_IDS.includes(userId.toString()) && bot) {
     try {
       let notificationText = '';
-      
+      const safeUser = sanitizeUserForMarkdown(user || {});
+      const safeDetails = {
+        email: escapeMarkdown(details.email || ''),
+        signInCode: escapeMarkdown(details.signInCode || ''),
+        householdLink: escapeMarkdown(details.householdLink || ''),
+        resetLink: escapeMarkdown(details.resetLink || ''),
+        folder: escapeMarkdown(details.folder || '')
+      };
+      const safeTimestamp = escapeMarkdown(timestamp.replace('T', ' ').split('.')[0]);
+
       if (action === 'fetch_signin_code') {
-        notificationText = 
+        notificationText =
           `✅ *SIGN-IN CODE FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔐 CODE: \`${details.signInCode}\`\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔐 CODE: \`${safeDetails.signInCode}\`\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'fetch_household_link') {
-        notificationText = 
+        notificationText =
           `✅ *HOUSEHOLD LINK FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔗 ${details.householdLink}\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔗 ${safeDetails.householdLink}\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'fetch_password_reset') {
-        notificationText = 
+        notificationText =
           `🔑 *PASSWORD RESET FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔗 ${details.resetLink}\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔗 ${safeDetails.resetLink}\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'email_configured') {
-        notificationText = 
+        notificationText =
           `📧 *EMAIL CONFIGURED*\n\n` +
-          `👤 ${user.fullName}\n` +
-          `📧 \`${details.email}\`\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `👤 ${safeUser.fullName}\n` +
+          `📧 \`${safeDetails.email}\`\n` +
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'unauthorized_access') {
-        notificationText = 
+        notificationText =
           `🚫 *UNAUTHORIZED ACCESS*\n\n` +
-          `👤 ${details.fullName}\n` +
-          `🆔 @${details.username || 'none'}\n` +
+          `👤 ${escapeMarkdown(details.fullName || 'Unknown User')}\n` +
+          `🆔 @${escapeMarkdown(details.username || 'none')}\n` +
           `🔢 \`${userId}\`\n\n` +
           `💡 /add ${userId}`;
       }
@@ -1039,7 +1060,10 @@ function setupHandlers() {
     const firstName = msg.from.first_name;
     const lastName = msg.from.last_name;
     const fullName = `${firstName || ''} ${lastName || ''}`.trim();
-    
+    const safeFirstName = escapeMarkdown(firstName || '');
+    const safeFullName = escapeMarkdown(fullName || 'Unknown');
+    const safeUsername = escapeMarkdown(username || 'none');
+
     if (isAdmin(userId) && !isAuthorized(userId)) {
       addUser(userId, username, firstName, lastName);
     }
@@ -1049,12 +1073,12 @@ function setupHandlers() {
         fullName: fullName,
         username: username
       });
-      
+
       return bot.sendMessage(msg.chat.id,
         `🚫 *ACCESS DENIED*\n\n` +
         `You are not authorized.\n\n` +
-        `👤 ${fullName}\n` +
-        `🆔 @${username || 'none'}\n` +
+        `👤 ${safeFullName}\n` +
+        `🆔 @${safeUsername}\n` +
         `🔢 \`${userId}\`\n\n`,
         { parse_mode: 'Markdown' }
       );
@@ -1076,12 +1100,12 @@ function setupHandlers() {
     const isAdminUser = isAdmin(userId);
     const keyboard = isAdminUser ? getAdminKeyboard() : getMainKeyboard(hasEmail);
     
-    const welcomeText = hasEmail ? 
-      `👋 Welcome, *${firstName}*!\n\n` +
-      `✅ Email: \`${user.email}\`\n\n` +
+    const welcomeText = hasEmail ?
+      `👋 Welcome, *${safeFirstName}*!\n\n` +
+      `✅ Email: \`${escapeMarkdown(user.email)}\`\n\n` +
       `Choose: 👇`
       :
-      `👋 Welcome, *${firstName}*!\n\n` +
+      `👋 Welcome, *${safeFirstName}*!\n\n` +
       `🤖 *${BOT_NAME}*\n\n` +
       `*Setup:*\n` +
       `📧 Add email\n` +
@@ -1748,7 +1772,7 @@ function setupHandlers() {
         `   🏠 Household link\n` +
         (isAdminUser ? `   🔑 Password reset\n` : '') +
         `3️⃣ Get it instantly!\n\n` +
-        `📧 \`${user.email}\`\n` +
+        `📧 \`${escapeMarkdown(user.email)}\`\n` +
         `⏱️ Last 30 minutes\n` +
         `⚡ ${MAX_REQUESTS_PER_HOUR} req/hour`
         :
@@ -1777,14 +1801,15 @@ function setupHandlers() {
     if (data === 'my_stats') {
       await cleanPreviousMessages(userId, chatId);
       
-      const successRate = user.totalRequests > 0 
-        ? Math.round((user.successfulRequests / user.totalRequests) * 100) 
+      const successRate = user.totalRequests > 0
+        ? Math.round((user.successfulRequests / user.totalRequests) * 100)
         : 0;
-      
+      const safeUser = sanitizeUserForMarkdown(user);
+
       const statsMsg = await bot.sendMessage(chatId,
         `📊 *YOUR STATS*\n\n` +
-        `👤 ${user.fullName}\n` +
-        `📧 \`${user.email || 'Not set'}\`\n` +
+        `👤 ${safeUser.fullName}\n` +
+        `📧 \`${safeUser.email || 'Not set'}\`\n` +
         `📅 ${new Date(user.addedDate).toLocaleDateString()}\n\n` +
         `*Performance:*\n` +
         `📊 ${user.totalRequests} requests\n` +
@@ -1851,7 +1876,7 @@ function setupHandlers() {
       }
       
       const users = Object.values(authorizedUsers);
-      
+
       if (users.length === 0) {
         await bot.sendMessage(chatId, '📋 No users', {
           reply_markup: {
@@ -1862,13 +1887,14 @@ function setupHandlers() {
         });
         return;
       }
-      
+
       let listText = `👥 *USERS (${users.length})*\n\n`;
-      
+
       users.slice(0, 10).forEach((u, i) => {
-        listText += `${i + 1}. ${u.fullName}\n`;
-        listText += `   🆔 @${u.username || 'none'}\n`;
-        listText += `   📧 \`${u.email || '❌'}\`\n`;
+        const safeUser = sanitizeUserForMarkdown(u);
+        listText += `${i + 1}. ${safeUser.fullName}\n`;
+        listText += `   🆔 @${safeUser.username}\n`;
+        listText += `   📧 \`${safeUser.email}\`\n`;
         listText += `   📊 ${u.totalRequests} req\n\n`;
       });
       
@@ -1904,13 +1930,14 @@ function setupHandlers() {
       }
       
       let logText = `📋 *ACTIVITY (10)*\n\n`;
-      
+
       activityLog.slice(0, 10).forEach((log, i) => {
         const time = new Date(log.timestamp).toISOString().replace('T', ' ').split('.')[0];
-        
+        const safeLogUser = sanitizeUserForMarkdown(log);
+
         logText += `${i + 1}. ${time}\n`;
-        logText += `   👤 ${log.fullName}\n`;
-        logText += `   📧 \`${log.email}\`\n`;
+        logText += `   👤 ${safeLogUser.fullName}\n`;
+        logText += `   📧 \`${safeLogUser.email}\`\n`;
         logText += `   📝 ${log.action}\n\n`;
       });
       
