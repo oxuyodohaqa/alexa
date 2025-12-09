@@ -709,6 +709,12 @@ function detectAndExtract(text = '', html = '', subject = '', searchType = 'sign
 
 function fetchNetflixEmail(userEmail, searchType = 'signin') {
   const startTime = Date.now();
+  const attemptErrors = [];
+  let anyAccountConnected = false;
+
+  function maskEmailForLog(email = '') {
+    return email.replace(/(.{3}).*(@.*)/, '$1***$2');
+  }
 
   function senderMatches(addresses = []) {
     return addresses.some(address => {
@@ -756,6 +762,7 @@ function fetchNetflixEmail(userEmail, searchType = 'signin') {
       }
 
       imap.once('ready', () => {
+        anyAccountConnected = true;
         // Search INBOX first
         searchFolder('INBOX', (inboxResult) => {
           if (inboxResult) {
@@ -892,6 +899,7 @@ function fetchNetflixEmail(userEmail, searchType = 'signin') {
 
       imap.once('error', (err) => {
         console.error('❌ IMAP connection error:', err.message);
+        attemptErrors.push({ account: account.user, message: err.message });
         finish();
       });
 
@@ -908,12 +916,26 @@ function fetchNetflixEmail(userEmail, searchType = 'signin') {
 
   const accountsToTry = gmailAccounts.length > 0 ? gmailAccounts : [];
 
-  return accountsToTry.reduce((promise, account) => {
+  const attemptsPromise = accountsToTry.reduce((promise, account) => {
     return promise.then((res) => {
       if (res) return res;
       return searchWithAccount(account);
     });
   }, Promise.resolve(null));
+
+  return attemptsPromise.then((result) => {
+    if (result) return result;
+
+    if (!anyAccountConnected && attemptErrors.length === accountsToTry.length) {
+      const errorSummary = attemptErrors
+        .map(({ account, message }) => `${maskEmailForLog(account)} (${message})`)
+        .join('; ');
+
+      throw new Error(`All IMAP accounts failed: ${errorSummary}`);
+    }
+
+    return null;
+  });
 }
 
 // ════════════════════════════════════════════════════════════
