@@ -88,7 +88,7 @@ if (gmailAccounts.length === 0) {
   gmailAccounts.push(...defaultAccounts);
 
   const defaultSource = DEFAULT_GMAIL_ACCOUNTS_RAW ? 'env' : 'built-in fallback';
-  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update .env to override).`);
+  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update environment variables to override).`);
 }
 
 const NETFLIX_SENDER_ADDRESSES = (process.env.NETFLIX_SENDER_ADDRESSES
@@ -112,12 +112,12 @@ const MAX_REQUESTS_PER_HOUR = 10;
 
 // Validation
 if (!TELEGRAM_TOKEN) {
-  console.error('❌ MISSING: TELEGRAM_BOT_TOKEN in .env');
+  console.error('❌ MISSING: TELEGRAM_BOT_TOKEN in environment configuration');
   process.exit(1);
 }
 
 if (gmailAccounts.length === 0) {
-  console.error('❌ MISSING: Gmail credentials in .env');
+  console.error('❌ MISSING: Gmail credentials in environment configuration');
   process.exit(1);
 }
 
@@ -983,9 +983,14 @@ function fetchNetflixEmail(userEmail, searchType = 'signin') {
 
 function getErrorMessage(error) {
   const msg = error.message || '';
-  
+
+  if (msg.startsWith('All IMAP accounts failed')) {
+    const envHint = 'Verify GMAIL_ACCOUNTS or GMAIL_USER/GMAIL_APP_PASSWORD environment settings (no spaces).';
+    return `${msg}\n${envHint}`;
+  }
+
   if (msg.includes('EAUTH') || msg.includes('Invalid credentials')) {
-    return 'Gmail authentication failed. Contact admin to check credentials.';
+    return 'Gmail authentication failed. Refresh the app password in your Gmail settings or contact admin.';
   }
   
   if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
