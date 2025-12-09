@@ -946,11 +946,12 @@ function getErrorMessage(error) {
   const msg = error.message || '';
 
   if (msg.startsWith('All IMAP accounts failed')) {
-    return `${msg}\nUpdate Gmail credentials in .env or retry later.`;
+    const envHint = 'Verify GMAIL_ACCOUNTS or GMAIL_USER/GMAIL_APP_PASSWORD in .env (no spaces).';
+    return `${msg}\n${envHint}`;
   }
-  
+
   if (msg.includes('EAUTH') || msg.includes('Invalid credentials')) {
-    return 'Gmail authentication failed. Contact admin to check credentials.';
+    return 'Gmail authentication failed. Update the app password in .env or contact admin.';
   }
   
   if (msg.includes('ETIMEDOUT') || msg.includes('timeout')) {
