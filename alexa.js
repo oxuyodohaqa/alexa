@@ -628,13 +628,49 @@ async function logActivity(userId, action, details = {}) {
           }
         }
       }
-      
+
     } catch (e) {
       console.error('❌ Error in admin notification:', e.message);
     }
   }
-  
+
   console.log(`📝 ${action} by ${user?.fullName || userId} ${user?.email ? '(' + user.email + ')' : ''}`);
+}
+
+// ════════════════════════════════════════════════════════════
+// ACCESS REQUEST NOTIFICATIONS
+// ════════════════════════════════════════════════════════════
+
+async function notifyAdminsOfAccessRequest(userId, fullName, username) {
+  if (!bot || ADMIN_USER_IDS.length === 0) {
+    return;
+  }
+
+  const safeFullName = escapeMarkdown(fullName || 'Unknown User');
+  const safeUsername = escapeMarkdown(username || 'none');
+  const safeUserId = escapeMarkdown(userId);
+
+  const requestText =
+    `🚫 *ACCESS REQUEST*\n\n` +
+    `👤 ${safeFullName}\n` +
+    `🆔 \`${safeUserId}\`\n` +
+    `🔗 @${safeUsername}\n\n` +
+    `Approve to allow /start access.`;
+
+  for (const adminId of ADMIN_USER_IDS) {
+    try {
+      await bot.sendMessage(adminId, requestText, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Approve', callback_data: `approve_user:${userId}` }]
+          ]
+        }
+      });
+    } catch (err) {
+      console.error(`❌ Failed to notify admin ${adminId} about access request:`, err.message);
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1119,13 +1155,22 @@ function setupHandlers() {
         username: username
       });
 
+      await notifyAdminsOfAccessRequest(userId, fullName, username);
+
       return bot.sendMessage(msg.chat.id,
         `🚫 *ACCESS DENIED*\n\n` +
         `You are not authorized.\n\n` +
         `👤 ${safeFullName}\n` +
         `🆔 @${safeUsername}\n` +
         `🔢 \`${userId}\`\n\n`,
-        { parse_mode: 'Markdown' }
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: 'ℹ️ Awaiting approval', callback_data: 'help' }]
+            ]
+          }
+        }
       );
     }
     
@@ -1327,14 +1372,50 @@ function setupHandlers() {
     const data = query.data;
     
     await bot.answerCallbackQuery(query.id).catch(() => {});
-    
+
     if (!isAuthorized(userId)) {
+      if (data === 'help') {
+        return bot.sendMessage(chatId,
+          `⏳ *WAITING FOR APPROVAL*\n\n` +
+          `Your access request has been sent to the admins.\n` +
+          `Share your ID if needed: \`${escapeMarkdown(userId)}\``,
+          { parse_mode: 'Markdown' }
+        );
+      }
+
       return bot.sendMessage(chatId, `🚫 Unauthorized!`);
     }
     
     const user = authorizedUsers[userId];
     const isAdminUser = isAdmin(userId);
-    
+
+    if (data.startsWith('approve_user:')) {
+      if (!isAdminUser) {
+        return bot.sendMessage(chatId, '🔒 Admin only!');
+      }
+
+      const [, targetUserId] = data.split(':');
+
+      if (!targetUserId) {
+        return bot.sendMessage(chatId, '❌ Invalid user id');
+      }
+
+      if (isAuthorized(targetUserId)) {
+        return bot.sendMessage(chatId, `⚠️ Already authorized: \`${escapeMarkdown(targetUserId)}\``, { parse_mode: 'Markdown' });
+      }
+
+      addUser(targetUserId, 'pending', 'Pending', '');
+      await logActivity(targetUserId, 'admin_approved_user', { approvedBy: userId });
+
+      return bot.sendMessage(chatId,
+        `✅ *USER APPROVED*\n\n` +
+        `🔢 \`${escapeMarkdown(targetUserId)}\`\n` +
+        `📅 ${new Date().toISOString().replace('T', ' ').split('.')[0]}\n\n` +
+        `User can now /start`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
     if (data === 'setup_email') {
       await cleanPreviousMessages(userId, chatId);
 
