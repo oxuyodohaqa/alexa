@@ -21,7 +21,32 @@ const ALLOWED_EMAIL_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAINS
   : ['gmail.com', 'icornet.art']
 ).map(domain => domain.trim().toLowerCase()).filter(Boolean);
 
+const DEFAULT_GMAIL_ACCOUNTS_RAW = process.env.DEFAULT_GMAIL_ACCOUNTS;
+const DEFAULT_GMAIL_ACCOUNTS_FALLBACK = [
+  'blackbarsee@gmail.com:zdjn fkdq wnum fmak',
+  'blackbarsee@icornet.art:zdjn fkdq wnum fmak'
+];
+
 const gmailAccounts = [];
+
+function parseAccountEntries(raw = '', label = 'GMAIL_ACCOUNTS') {
+  return raw
+    .split(/[\n;,]/)
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .map(entry => {
+      const [user, passwordRaw] = entry.split(':');
+      const password = (passwordRaw || '').replace(/\s+/g, '');
+
+      if (user && password) {
+        return { user, password };
+      }
+
+      console.error(`⚠️  Skipping invalid ${label} entry: ${entry}`);
+      return null;
+    })
+    .filter(Boolean);
+}
 
 // Primary/secondary (legacy) support
 const primaryGmailUser = process.env.GMAIL_USER;
@@ -34,25 +59,11 @@ const secondaryGmailPassword = process.env.GMAIL_APP_PASSWORD_2
   ? process.env.GMAIL_APP_PASSWORD_2.replace(/\s+/g, '')
   : '';
 
-// New: multi-account env (semicolon/comma separated list of user:pass)
+// New: multi-account env (semicolon/comma/newline separated list of user:pass)
 const multiAccountEnv = process.env.GMAIL_ACCOUNTS;
 
 if (multiAccountEnv) {
-  const entries = multiAccountEnv
-    .split(/[;,]/)
-    .map(entry => entry.trim())
-    .filter(Boolean);
-
-  entries.forEach(entry => {
-    const [user, passwordRaw] = entry.split(':');
-    const password = (passwordRaw || '').replace(/\s+/g, '');
-
-    if (user && password) {
-      gmailAccounts.push({ user, password });
-    } else {
-      console.error(`⚠️  Skipping invalid GMAIL_ACCOUNTS entry: ${entry}`);
-    }
-  });
+  gmailAccounts.push(...parseAccountEntries(multiAccountEnv, 'GMAIL_ACCOUNTS'));
 }
 
 // Legacy fallback for backward compatibility
@@ -64,6 +75,18 @@ if (!multiAccountEnv) {
   if (secondaryGmailUser && secondaryGmailPassword) {
     gmailAccounts.push({ user: secondaryGmailUser, password: secondaryGmailPassword });
   }
+}
+
+// Default bundle for two Gmail accounts if nothing is configured
+if (gmailAccounts.length === 0) {
+  const defaultAccounts = DEFAULT_GMAIL_ACCOUNTS_RAW
+    ? parseAccountEntries(DEFAULT_GMAIL_ACCOUNTS_RAW, 'DEFAULT_GMAIL_ACCOUNTS')
+    : parseAccountEntries(DEFAULT_GMAIL_ACCOUNTS_FALLBACK.join(';'), 'DEFAULT_GMAIL_ACCOUNTS');
+
+  gmailAccounts.push(...defaultAccounts);
+
+  const defaultSource = DEFAULT_GMAIL_ACCOUNTS_RAW ? 'env' : 'built-in fallback';
+  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update .env to override).`);
 }
 
 const NETFLIX_SENDER_ADDRESSES = (process.env.NETFLIX_SENDER_ADDRESSES
