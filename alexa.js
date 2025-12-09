@@ -14,12 +14,85 @@ const ADMIN_USER_IDS = process.env.ADMIN_USER_IDS
   ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()) 
   : [];
 
-const GMAIL_USER = process.env.GMAIL_USER;
+const DEFAULT_USER_EMAIL = process.env.DEFAULT_USER_EMAIL || 'blackbarsee@gmail.com';
 
-// Auto-clean Gmail App Password (remove all spaces)
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD 
-  ? process.env.GMAIL_APP_PASSWORD.replace(/\s+/g, '') 
+const ALLOWED_EMAIL_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAINS
+  ? process.env.ALLOWED_EMAIL_DOMAINS.split(',')
+  : ['gmail.com', 'icornet.art']
+).map(domain => domain.trim().toLowerCase()).filter(Boolean);
+
+const DEFAULT_GMAIL_ACCOUNTS_RAW = process.env.DEFAULT_GMAIL_ACCOUNTS;
+const DEFAULT_GMAIL_ACCOUNTS_FALLBACK = [
+  'blackbarsee@gmail.com:zdjn fkdq wnum fmak',
+  'blackbarsee@icornet.art:zdjn fkdq wnum fmak'
+];
+
+const gmailAccounts = [];
+
+function parseAccountEntries(raw = '', label = 'GMAIL_ACCOUNTS') {
+  return raw
+    .split(/[\n;,]/)
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .map(entry => {
+      const [user, passwordRaw] = entry.split(':');
+      const password = (passwordRaw || '').replace(/\s+/g, '');
+
+      if (user && password) {
+        return { user, password };
+      }
+
+      console.error(`⚠️  Skipping invalid ${label} entry: ${entry}`);
+      return null;
+    })
+    .filter(Boolean);
+}
+
+// Primary/secondary (legacy) support
+const primaryGmailUser = process.env.GMAIL_USER;
+const primaryGmailPassword = process.env.GMAIL_APP_PASSWORD
+  ? process.env.GMAIL_APP_PASSWORD.replace(/\s+/g, '')
   : '';
+
+const secondaryGmailUser = process.env.GMAIL_USER_2;
+const secondaryGmailPassword = process.env.GMAIL_APP_PASSWORD_2
+  ? process.env.GMAIL_APP_PASSWORD_2.replace(/\s+/g, '')
+  : '';
+
+// New: multi-account env (semicolon/comma/newline separated list of user:pass)
+const multiAccountEnv = process.env.GMAIL_ACCOUNTS;
+
+if (multiAccountEnv) {
+  gmailAccounts.push(...parseAccountEntries(multiAccountEnv, 'GMAIL_ACCOUNTS'));
+}
+
+// Legacy fallback for backward compatibility
+if (!multiAccountEnv) {
+  if (primaryGmailUser && primaryGmailPassword) {
+    gmailAccounts.push({ user: primaryGmailUser, password: primaryGmailPassword });
+  }
+
+  if (secondaryGmailUser && secondaryGmailPassword) {
+    gmailAccounts.push({ user: secondaryGmailUser, password: secondaryGmailPassword });
+  }
+}
+
+// Default bundle for two Gmail accounts if nothing is configured
+if (gmailAccounts.length === 0) {
+  const defaultAccounts = DEFAULT_GMAIL_ACCOUNTS_RAW
+    ? parseAccountEntries(DEFAULT_GMAIL_ACCOUNTS_RAW, 'DEFAULT_GMAIL_ACCOUNTS')
+    : parseAccountEntries(DEFAULT_GMAIL_ACCOUNTS_FALLBACK.join(';'), 'DEFAULT_GMAIL_ACCOUNTS');
+
+  gmailAccounts.push(...defaultAccounts);
+
+  const defaultSource = DEFAULT_GMAIL_ACCOUNTS_RAW ? 'env' : 'built-in fallback';
+  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update .env to override).`);
+}
+
+const NETFLIX_SENDER_ADDRESSES = (process.env.NETFLIX_SENDER_ADDRESSES
+  ? process.env.NETFLIX_SENDER_ADDRESSES.split(',')
+  : ['info@account.netflix.com']
+).map(address => address.trim().toLowerCase()).filter(Boolean);
 
 const BOT_NAME = process.env.BOT_NAME || 'Netflix Code Bot';
 const BOT_VERSION = process.env.BOT_VERSION || '2.3.0';
@@ -41,7 +114,7 @@ if (!TELEGRAM_TOKEN) {
   process.exit(1);
 }
 
-if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
+if (gmailAccounts.length === 0) {
   console.error('❌ MISSING: Gmail credentials in .env');
   process.exit(1);
 }
@@ -54,8 +127,15 @@ if (ADMIN_USER_IDS.length === 0) {
 console.log('\n' + '═'.repeat(60));
 console.log(`🤖 ${BOT_NAME} v${BOT_VERSION}`);
 console.log('═'.repeat(60));
-console.log(`📧 Gmail: ${GMAIL_USER.replace(/(.{3}).*(@.*)/, '$1***$2')}`);
-console.log(`🔑 App Password: ${GMAIL_APP_PASSWORD.substring(0, 4)}${'*'.repeat(12)}`);
+console.log(`📧 Gmail Accounts: ${gmailAccounts.length}`);
+gmailAccounts.forEach((account, index) => {
+  const maskedEmail = account.user.replace(/(.{3}).*(@.*)/, '$1***$2');
+  console.log(`   • [${index + 1}] ${maskedEmail}`);
+});
+console.log(`📝 Default user email: ${DEFAULT_USER_EMAIL || 'Not set'}`);
+console.log(`🌐 Allowed email domains: ${ALLOWED_EMAIL_DOMAINS.join(', ') || 'Any'}`);
+console.log(`🔑 App Passwords: ${gmailAccounts.length}`);
+console.log(`📨 Netflix Senders: ${NETFLIX_SENDER_ADDRESSES.join(', ')}`);
 console.log(`👤 Admin IDs: ${ADMIN_USER_IDS.length > 0 ? ADMIN_USER_IDS.join(', ') : 'Not set'}`);
 console.log(`🗑️ Data Retention: ${DATA_RETENTION_DAYS} days`);
 console.log(`📅 ${new Date().toISOString().replace('T', ' ').split('.')[0]} UTC`);
@@ -67,6 +147,18 @@ console.log('═'.repeat(60) + '\n');
 
 const userRequestQueue = {};
 const userRateLimits = {};
+
+function escapeMarkdown(text = '') {
+  return text.toString().replace(/([_*\[\]()`])/g, '\\$1');
+}
+
+function sanitizeUserForMarkdown(user = {}) {
+  return {
+    fullName: escapeMarkdown(user.fullName || 'Unknown User'),
+    username: escapeMarkdown(user.username || 'none'),
+    email: escapeMarkdown(user.email || 'No email')
+  };
+}
 
 function isUserBusy(userId) {
   return userRequestQueue[userId] === true;
@@ -331,12 +423,23 @@ function isValidEmail(email) {
   ];
   
   const domain = email.toLowerCase().split('@')[1];
-  
+
   if (blockedDomains.includes(domain)) {
     return { valid: false, reason: 'Temporary email services not allowed' };
   }
-  
+
+  if (ALLOWED_EMAIL_DOMAINS.length > 0 && !ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+    return {
+      valid: false,
+      reason: `Email domain must be one of: ${ALLOWED_EMAIL_DOMAINS.join(', ')}`
+    };
+  }
+
   return { valid: true, reason: null };
+}
+
+function isDefaultEmailValid() {
+  return DEFAULT_USER_EMAIL && isValidEmail(DEFAULT_USER_EMAIL).valid;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -345,11 +448,13 @@ function isValidEmail(email) {
 
 function addUser(userId, username, firstName, lastName) {
   const fullName = `${firstName || ''} ${lastName || ''}`.trim() || 'Unknown';
+  const defaultEmailValid = isDefaultEmailValid();
+
   authorizedUsers[userId] = {
     userId: userId,
     username: username || null,
     fullName: fullName,
-    email: null,
+    email: defaultEmailValid ? DEFAULT_USER_EMAIL : null,
     addedDate: new Date().toISOString(),
     totalRequests: 0,
     successfulRequests: 0,
@@ -456,49 +561,58 @@ async function logActivity(userId, action, details = {}) {
   if (ADMIN_USER_IDS.length > 0 && !ADMIN_USER_IDS.includes(userId.toString()) && bot) {
     try {
       let notificationText = '';
-      
+      const safeUser = sanitizeUserForMarkdown(user || {});
+      const safeDetails = {
+        email: escapeMarkdown(details.email || ''),
+        signInCode: escapeMarkdown(details.signInCode || ''),
+        householdLink: escapeMarkdown(details.householdLink || ''),
+        resetLink: escapeMarkdown(details.resetLink || ''),
+        folder: escapeMarkdown(details.folder || '')
+      };
+      const safeTimestamp = escapeMarkdown(timestamp.replace('T', ' ').split('.')[0]);
+
       if (action === 'fetch_signin_code') {
-        notificationText = 
+        notificationText =
           `✅ *SIGN-IN CODE FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔐 CODE: \`${details.signInCode}\`\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔐 CODE: \`${safeDetails.signInCode}\`\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'fetch_household_link') {
-        notificationText = 
+        notificationText =
           `✅ *HOUSEHOLD LINK FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔗 ${details.householdLink}\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔗 ${safeDetails.householdLink}\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'fetch_password_reset') {
-        notificationText = 
+        notificationText =
           `🔑 *PASSWORD RESET FETCHED*\n\n` +
-          `👤 ${user.fullName} (@${user.username || 'none'})\n` +
-          `📧 \`${user.email}\`\n\n` +
-          `🔗 ${details.resetLink}\n` +
-          `📂 ${details.folder}\n` +
+          `👤 ${safeUser.fullName} (@${safeUser.username})\n` +
+          `📧 \`${safeUser.email}\`\n\n` +
+          `🔗 ${safeDetails.resetLink}\n` +
+          `📂 ${safeDetails.folder}\n` +
           `⏱️ ${details.fetchTime}s\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'email_configured') {
-        notificationText = 
+        notificationText =
           `📧 *EMAIL CONFIGURED*\n\n` +
-          `👤 ${user.fullName}\n` +
-          `📧 \`${details.email}\`\n` +
-          `📅 ${timestamp.replace('T', ' ').split('.')[0]}`;
-          
+          `👤 ${safeUser.fullName}\n` +
+          `📧 \`${safeDetails.email}\`\n` +
+          `📅 ${safeTimestamp}`;
+
       } else if (action === 'unauthorized_access') {
-        notificationText = 
+        notificationText =
           `🚫 *UNAUTHORIZED ACCESS*\n\n` +
-          `👤 ${details.fullName}\n` +
-          `🆔 @${details.username || 'none'}\n` +
+          `👤 ${escapeMarkdown(details.fullName || 'Unknown User')}\n` +
+          `🆔 @${escapeMarkdown(details.username || 'none')}\n` +
           `🔢 \`${userId}\`\n\n` +
           `💡 /add ${userId}`;
       }
@@ -592,178 +706,235 @@ function detectAndExtract(text = '', html = '', subject = '', searchType = 'sign
 // GMAIL IMAP FETCH - LAST 30 MIN ONLY (READ/UNREAD, INBOX/SPAM)
 // ════════════════════════════════════════════════════════════
 
+
 function fetchNetflixEmail(userEmail, searchType = 'signin') {
   const startTime = Date.now();
-  
-  return new Promise((resolve) => {
-    const imap = new Imap({
-      user: GMAIL_USER,
-      password: GMAIL_APP_PASSWORD,
-      host: 'imap.gmail.com',
-      port: 993,
-      tls: true,
-      tlsOptions: { rejectUnauthorized: false },
-      connTimeout: 5000,
-      authTimeout: 5000
-    });
-    
-    let result = null;
-    let finished = false;
-    
-    function finish() {
-      if (finished) return;
-      finished = true;
-      
-      try { 
-        imap.end(); 
-      } catch (e) {}
+  const attemptErrors = [];
+  let anyAccountConnected = false;
 
-      if (result) {
-        result.timeTaken = Math.round((Date.now() - startTime) / 1000);
+  function maskEmailForLog(email = '') {
+    return email.replace(/(.{3}).*(@.*)/, '$1***$2');
+  }
+
+  function senderMatches(addresses = []) {
+    return addresses.some(address => {
+      if (!address) return false;
+      const normalized = address.toLowerCase();
+      return NETFLIX_SENDER_ADDRESSES.some(sender => {
+        if (sender.includes('@')) {
+          return normalized === sender;
+        }
+        return normalized.endsWith(`@${sender}`);
+      });
+    });
+  }
+
+  function searchWithAccount(account) {
+    return new Promise((resolve) => {
+      const imap = new Imap({
+        user: account.user,
+        password: account.password,
+        host: 'imap.gmail.com',
+        port: 993,
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false },
+        connTimeout: 5000,
+        authTimeout: 5000
+      });
+
+      let result = null;
+      let finished = false;
+
+      function finish() {
+        if (finished) return;
+        finished = true;
+
+        try {
+          imap.end();
+        } catch (e) {}
+
+        if (result) {
+          result.timeTaken = Math.round((Date.now() - startTime) / 1000);
+          result.account = account.user;
+        }
+
+        resolve(result);
       }
-      
-      resolve(result);
-    }
-    
-    imap.once('ready', () => {
-      // Search INBOX first
-      searchFolder('INBOX', (inboxResult) => {
-        if (inboxResult) {
-          result = inboxResult;
-          finish();
-        } else {
-          // If not found in INBOX, search SPAM
-          searchFolder('[Gmail]/Spam', (spamResult) => {
-            if (spamResult) {
-              result = spamResult;
-            }
+
+      imap.once('ready', () => {
+        anyAccountConnected = true;
+        // Search INBOX first
+        searchFolder('INBOX', (inboxResult) => {
+          if (inboxResult) {
+            result = inboxResult;
             finish();
+          } else {
+            // If not found in INBOX, search SPAM
+            searchFolder('[Gmail]/Spam', (spamResult) => {
+              if (spamResult) {
+                result = spamResult;
+              }
+              finish();
+            });
+          }
+        });
+
+        function searchFolder(folderName, callback) {
+          imap.openBox(folderName, false, (err) => {
+            if (err) {
+              console.error(`❌ Error opening ${folderName}:`, err.message);
+              return callback(null);
+            }
+
+            // Search last 30 minutes ONLY (read or unread)
+            const sinceDate = new Date();
+            sinceDate.setMinutes(sinceDate.getMinutes() - 30);
+
+            const searchCriteria = [
+              ['SINCE', sinceDate],
+              ['TO', userEmail]
+            ];
+
+            imap.search(searchCriteria, (err, results) => {
+              if (err) {
+                console.error(`❌ IMAP search error in ${folderName}:`, err.message);
+                return callback(null);
+              }
+
+              if (!results || results.length === 0) {
+                console.log(`📭 No emails for ${userEmail} in ${folderName}`);
+                return callback(null);
+              }
+
+              console.log(`📬 Found ${results.length} email(s) for ${userEmail} in ${folderName} (${account.user})`);
+
+              // Process ALL emails from last 30 min, find the most recent matching one
+              processEmails(results, folderName, callback);
+            });
+          });
+        }
+
+        function processEmails(results, folder, callback) {
+          let foundResult = null;
+          let processedCount = 0;
+
+          // Fetch all emails
+          const f = imap.fetch(results, { bodies: '', struct: true });
+
+          f.on('message', (msg) => {
+            msg.on('body', (stream) => {
+              simpleParser(stream, (err, parsed) => {
+                if (err) {
+                  console.error('❌ Error parsing email:', err.message);
+                  processedCount++;
+                  return;
+                }
+
+                const fromAddresses = (parsed.from?.value || [])
+                  .map(entry => (entry.address || '').toLowerCase())
+                  .filter(Boolean);
+
+                if (!senderMatches(fromAddresses)) {
+                  processedCount++;
+                  return;
+                }
+
+                const emailDate = parsed.date || new Date();
+
+                // Check if email is within last 30 minutes
+                const emailAge = Date.now() - emailDate.getTime();
+                const thirtyMinutesMs = 30 * 60 * 1000;
+
+                if (emailAge > thirtyMinutesMs) {
+                  console.log(`⏰ Email too old (${Math.floor(emailAge / 60000)}m ago), skipping`);
+                  processedCount++;
+                  return;
+                }
+
+                const extracted = detectAndExtract(
+                  parsed.text || '',
+                  parsed.html || '',
+                  parsed.subject || '',
+                  searchType
+                );
+
+                if (extracted) {
+                  // Found matching email
+                  if (!foundResult || emailDate > foundResult.date) {
+                    // Keep the most recent one
+                    foundResult = {
+                      type: extracted.type,
+                      content: extracted.content,
+                      from: parsed.from?.text || 'Unknown',
+                      to: parsed.to?.text || userEmail,
+                      subject: parsed.subject || '',
+                      date: emailDate,
+                      folder: folder,
+                      account: account.user
+                    };
+
+                    const elapsed = Math.round((Date.now() - startTime) / 1000);
+                    console.log(`✅ Found ${extracted.type} for ${userEmail} in ${folder} (${elapsed}s, ${Math.floor(emailAge / 60000)}m old)`);
+                  }
+                }
+
+                processedCount++;
+              });
+            });
+          });
+
+          f.once('error', (err) => {
+            console.error('❌ Fetch error:', err.message);
+            callback(null);
+          });
+
+          f.once('end', () => {
+            // Wait a bit for all emails to be processed
+            setTimeout(() => {
+              callback(foundResult);
+            }, 2000);
           });
         }
       });
-      
-      function searchFolder(folderName, callback) {
-        imap.openBox(folderName, false, (err) => {
-          if (err) {
-            console.error(`❌ Error opening ${folderName}:`, err.message);
-            return callback(null);
-          }
-          
-          // Search last 30 minutes ONLY (read or unread)
-          const sinceDate = new Date();
-          sinceDate.setMinutes(sinceDate.getMinutes() - 30);
-          
-          const searchCriteria = [
-            ['SINCE', sinceDate],
-            ['TO', userEmail],
-            ['FROM', 'info@account.netflix.com']
-          ];
-          
-          imap.search(searchCriteria, (err, results) => {
-            if (err) {
-              console.error(`❌ IMAP search error in ${folderName}:`, err.message);
-              return callback(null);
-            }
-            
-            if (!results || results.length === 0) {
-              console.log(`📭 No emails for ${userEmail} in ${folderName}`);
-              return callback(null);
-            }
-            
-            console.log(`📬 Found ${results.length} email(s) for ${userEmail} in ${folderName}`);
-            
-            // Process ALL emails from last 30 min, find the most recent matching one
-            processEmails(results, folderName, callback);
-          });
-        });
-      }
-      
-      function processEmails(results, folder, callback) {
-        let foundResult = null;
-        let processedCount = 0;
-        
-        // Fetch all emails
-        const f = imap.fetch(results, { bodies: '', struct: true });
-        
-        f.on('message', (msg) => {
-          msg.on('body', (stream) => {
-            simpleParser(stream, (err, parsed) => {
-              if (err) {
-                console.error('❌ Error parsing email:', err.message);
-                processedCount++;
-                return;
-              }
-              
-              const emailDate = parsed.date || new Date();
-              
-              // Check if email is within last 30 minutes
-              const emailAge = Date.now() - emailDate.getTime();
-              const thirtyMinutesMs = 30 * 60 * 1000;
-              
-              if (emailAge > thirtyMinutesMs) {
-                console.log(`⏰ Email too old (${Math.floor(emailAge / 60000)}m ago), skipping`);
-                processedCount++;
-                return;
-              }
-              
-              const extracted = detectAndExtract(
-                parsed.text || '', 
-                parsed.html || '', 
-                parsed.subject || '',
-                searchType
-              );
-              
-              if (extracted) {
-                // Found matching email
-                if (!foundResult || emailDate > foundResult.date) {
-                  // Keep the most recent one
-                  foundResult = {
-                    type: extracted.type,
-                    content: extracted.content,
-                    from: parsed.from?.text || 'Unknown',
-                    to: parsed.to?.text || userEmail,
-                    subject: parsed.subject || '',
-                    date: emailDate,
-                    folder: folder
-                  };
-                  
-                  const elapsed = Math.round((Date.now() - startTime) / 1000);
-                  console.log(`✅ Found ${extracted.type} for ${userEmail} in ${folder} (${elapsed}s, ${Math.floor(emailAge / 60000)}m old)`);
-                }
-              }
-              
-              processedCount++;
-            });
-          });
-        });
-        
-        f.once('error', (err) => {
-          console.error('❌ Fetch error:', err.message);
-          callback(null);
-        });
-        
-        f.once('end', () => {
-          // Wait a bit for all emails to be processed
-          setTimeout(() => {
-            callback(foundResult);
-          }, 2000);
-        });
-      }
-    });
-    
-    imap.once('error', (err) => {
-      console.error('❌ IMAP connection error:', err.message);
-      finish();
-    });
-    
-    imap.connect();
-    
-    setTimeout(() => {
-      if (!finished) {
-        console.log('⏱️ Timeout (10s)');
+
+      imap.once('error', (err) => {
+        console.error('❌ IMAP connection error:', err.message);
+        attemptErrors.push({ account: account.user, message: err.message });
         finish();
-      }
-    }, 10000);
+      });
+
+      imap.connect();
+
+      setTimeout(() => {
+        if (!finished) {
+          console.log('⏱️ Timeout (10s)');
+          finish();
+        }
+      }, 10000);
+    });
+  }
+
+  const accountsToTry = gmailAccounts.length > 0 ? gmailAccounts : [];
+
+  const attemptsPromise = accountsToTry.reduce((promise, account) => {
+    return promise.then((res) => {
+      if (res) return res;
+      return searchWithAccount(account);
+    });
+  }, Promise.resolve(null));
+
+  return attemptsPromise.then((result) => {
+    if (result) return result;
+
+    if (!anyAccountConnected && attemptErrors.length === accountsToTry.length) {
+      const errorSummary = attemptErrors
+        .map(({ account, message }) => `${maskEmailForLog(account)} (${message})`)
+        .join('; ');
+
+      throw new Error(`All IMAP accounts failed: ${errorSummary}`);
+    }
+
+    return null;
   });
 }
 
@@ -934,7 +1105,10 @@ function setupHandlers() {
     const firstName = msg.from.first_name;
     const lastName = msg.from.last_name;
     const fullName = `${firstName || ''} ${lastName || ''}`.trim();
-    
+    const safeFirstName = escapeMarkdown(firstName || '');
+    const safeFullName = escapeMarkdown(fullName || 'Unknown');
+    const safeUsername = escapeMarkdown(username || 'none');
+
     if (isAdmin(userId) && !isAuthorized(userId)) {
       addUser(userId, username, firstName, lastName);
     }
@@ -944,12 +1118,12 @@ function setupHandlers() {
         fullName: fullName,
         username: username
       });
-      
+
       return bot.sendMessage(msg.chat.id,
         `🚫 *ACCESS DENIED*\n\n` +
         `You are not authorized.\n\n` +
-        `👤 ${fullName}\n` +
-        `🆔 @${username || 'none'}\n` +
+        `👤 ${safeFullName}\n` +
+        `🆔 @${safeUsername}\n` +
         `🔢 \`${userId}\`\n\n`,
         { parse_mode: 'Markdown' }
       );
@@ -958,6 +1132,9 @@ function setupHandlers() {
     if (authorizedUsers[userId]) {
       authorizedUsers[userId].username = username || null;
       authorizedUsers[userId].fullName = fullName;
+      if (!authorizedUsers[userId].email && isDefaultEmailValid()) {
+        authorizedUsers[userId].email = DEFAULT_USER_EMAIL;
+      }
       saveUsers();
     }
     
@@ -968,12 +1145,12 @@ function setupHandlers() {
     const isAdminUser = isAdmin(userId);
     const keyboard = isAdminUser ? getAdminKeyboard() : getMainKeyboard(hasEmail);
     
-    const welcomeText = hasEmail ? 
-      `👋 Welcome, *${firstName}*!\n\n` +
-      `✅ Email: \`${user.email}\`\n\n` +
+    const welcomeText = hasEmail ?
+      `👋 Welcome, *${safeFirstName}*!\n\n` +
+      `✅ Email: \`${escapeMarkdown(user.email)}\`\n\n` +
       `Choose: 👇`
       :
-      `👋 Welcome, *${firstName}*!\n\n` +
+      `👋 Welcome, *${safeFirstName}*!\n\n` +
       `🤖 *${BOT_NAME}*\n\n` +
       `*Setup:*\n` +
       `📧 Add email\n` +
@@ -1160,20 +1337,25 @@ function setupHandlers() {
     
     if (data === 'setup_email') {
       await cleanPreviousMessages(userId, chatId);
-      
+
       awaitingEmailInput[userId] = true;
-      
+
+      const defaultEmailValid = isDefaultEmailValid();
+      const inline_keyboard = [];
+
+      if (defaultEmailValid) {
+        inline_keyboard.push([{ text: `Use ${DEFAULT_USER_EMAIL}`, callback_data: 'use_default_email' }]);
+      }
+
+      inline_keyboard.push([{ text: '❌ Cancel', callback_data: 'cancel_email' }]);
+
       const emailMsg = await bot.sendMessage(chatId,
         `📧 *EMAIL SETUP*\n\n` +
         `Send your email:\n\n` +
         `Example: \`user@domain.com\``,
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '❌ Cancel', callback_data: 'cancel_email' }]
-            ]
-          }
+          reply_markup: { inline_keyboard }
         }
       );
       
@@ -1187,7 +1369,7 @@ function setupHandlers() {
     if (data === 'cancel_email') {
       delete awaitingEmailInput[userId];
       await cleanPreviousMessages(userId, chatId);
-      
+
       const hasEmail = !!user.email;
       const keyboard = isAdminUser ? getAdminKeyboard() : getMainKeyboard(hasEmail);
       
@@ -1198,6 +1380,40 @@ function setupHandlers() {
       }
       
       deleteMessageSafe(chatId, cancelMsg.message_id, 3000);
+      return;
+    }
+
+    if (data === 'use_default_email') {
+      delete awaitingEmailInput[userId];
+
+      if (!isDefaultEmailValid()) {
+        const invalidMsg = await bot.sendMessage(chatId,
+          `⚠️ Default email is not set or invalid in the environment`,
+          { parse_mode: 'Markdown' }
+        );
+        deleteMessageSafe(chatId, invalidMsg.message_id, 4000);
+        return;
+      }
+
+      user.email = DEFAULT_USER_EMAIL;
+      saveUsers();
+
+      await logActivity(userId, 'email_configured', { email: user.email });
+
+      const hasEmail = !!user.email;
+      const keyboard = isAdminUser ? getAdminKeyboard() : getMainKeyboard(hasEmail);
+
+      const confirmMsg = await bot.sendMessage(chatId,
+        `✅ Email saved: \`${user.email}\`\n\n` +
+        `You can change it anytime via *Change Email*`,
+        { parse_mode: 'Markdown', ...keyboard }
+      );
+
+      if (!isAdminUser) {
+        trackUserMessage(userId, confirmMsg.message_id);
+      }
+
+      deleteMessageSafe(chatId, confirmMsg.message_id, 7000);
       return;
     }
     
@@ -1601,7 +1817,7 @@ function setupHandlers() {
         `   🏠 Household link\n` +
         (isAdminUser ? `   🔑 Password reset\n` : '') +
         `3️⃣ Get it instantly!\n\n` +
-        `📧 \`${user.email}\`\n` +
+        `📧 \`${escapeMarkdown(user.email)}\`\n` +
         `⏱️ Last 30 minutes\n` +
         `⚡ ${MAX_REQUESTS_PER_HOUR} req/hour`
         :
@@ -1630,14 +1846,15 @@ function setupHandlers() {
     if (data === 'my_stats') {
       await cleanPreviousMessages(userId, chatId);
       
-      const successRate = user.totalRequests > 0 
-        ? Math.round((user.successfulRequests / user.totalRequests) * 100) 
+      const successRate = user.totalRequests > 0
+        ? Math.round((user.successfulRequests / user.totalRequests) * 100)
         : 0;
-      
+      const safeUser = sanitizeUserForMarkdown(user);
+
       const statsMsg = await bot.sendMessage(chatId,
         `📊 *YOUR STATS*\n\n` +
-        `👤 ${user.fullName}\n` +
-        `📧 \`${user.email || 'Not set'}\`\n` +
+        `👤 ${safeUser.fullName}\n` +
+        `📧 \`${safeUser.email || 'Not set'}\`\n` +
         `📅 ${new Date(user.addedDate).toLocaleDateString()}\n\n` +
         `*Performance:*\n` +
         `📊 ${user.totalRequests} requests\n` +
@@ -1704,7 +1921,7 @@ function setupHandlers() {
       }
       
       const users = Object.values(authorizedUsers);
-      
+
       if (users.length === 0) {
         await bot.sendMessage(chatId, '📋 No users', {
           reply_markup: {
@@ -1715,13 +1932,14 @@ function setupHandlers() {
         });
         return;
       }
-      
+
       let listText = `👥 *USERS (${users.length})*\n\n`;
-      
+
       users.slice(0, 10).forEach((u, i) => {
-        listText += `${i + 1}. ${u.fullName}\n`;
-        listText += `   🆔 @${u.username || 'none'}\n`;
-        listText += `   📧 \`${u.email || '❌'}\`\n`;
+        const safeUser = sanitizeUserForMarkdown(u);
+        listText += `${i + 1}. ${safeUser.fullName}\n`;
+        listText += `   🆔 @${safeUser.username}\n`;
+        listText += `   📧 \`${safeUser.email}\`\n`;
         listText += `   📊 ${u.totalRequests} req\n\n`;
       });
       
@@ -1757,13 +1975,14 @@ function setupHandlers() {
       }
       
       let logText = `📋 *ACTIVITY (10)*\n\n`;
-      
+
       activityLog.slice(0, 10).forEach((log, i) => {
         const time = new Date(log.timestamp).toISOString().replace('T', ' ').split('.')[0];
-        
+        const safeLogUser = sanitizeUserForMarkdown(log);
+
         logText += `${i + 1}. ${time}\n`;
-        logText += `   👤 ${log.fullName}\n`;
-        logText += `   📧 \`${log.email}\`\n`;
+        logText += `   👤 ${safeLogUser.fullName}\n`;
+        logText += `   📧 \`${safeLogUser.email}\`\n`;
         logText += `   📝 ${log.action}\n\n`;
       });
       
