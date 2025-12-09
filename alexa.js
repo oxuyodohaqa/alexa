@@ -86,7 +86,7 @@ if (gmailAccounts.length === 0) {
   gmailAccounts.push(...defaultAccounts);
 
   const defaultSource = DEFAULT_GMAIL_ACCOUNTS_RAW ? 'env' : 'built-in fallback';
-  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update .env to override).`);
+  console.log(`ℹ️  Loaded DEFAULT_GMAIL_ACCOUNTS from ${defaultSource} (update environment variables to override).`);
 }
 
 const NETFLIX_SENDER_ADDRESSES = (process.env.NETFLIX_SENDER_ADDRESSES
@@ -110,12 +110,12 @@ const MAX_REQUESTS_PER_HOUR = 10;
 
 // Validation
 if (!TELEGRAM_TOKEN) {
-  console.error('❌ MISSING: TELEGRAM_BOT_TOKEN in .env');
+  console.error('❌ MISSING: TELEGRAM_BOT_TOKEN in environment configuration');
   process.exit(1);
 }
 
 if (gmailAccounts.length === 0) {
-  console.error('❌ MISSING: Gmail credentials in .env');
+  console.error('❌ MISSING: Gmail credentials in environment configuration');
   process.exit(1);
 }
 
