@@ -944,6 +944,10 @@ function fetchNetflixEmail(userEmail, searchType = 'signin') {
 
 function getErrorMessage(error) {
   const msg = error.message || '';
+
+  if (msg.startsWith('All IMAP accounts failed')) {
+    return `${msg}\nUpdate Gmail credentials in .env or retry later.`;
+  }
   
   if (msg.includes('EAUTH') || msg.includes('Invalid credentials')) {
     return 'Gmail authentication failed. Contact admin to check credentials.';
